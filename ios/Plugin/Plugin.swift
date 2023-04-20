@@ -24,6 +24,7 @@ public class CapacitorCalendar: CAPPlugin {
         
         let location = call.getString("location") ?? ""
         let notes = call.getString("notes") ?? ""
+        let alertOffset = call.getDouble("alertOffset") ?? nil
 
         guard let startDate = call.getDouble("startDate"), startDate > 0 else {
            let msg = "Must provide startDate property"
@@ -54,11 +55,16 @@ public class CapacitorCalendar: CAPPlugin {
                 }
 
                 let event = EKEvent.init(eventStore: self.store)
+                
                 event.title = title
                 event.location = location
                 event.notes = notes
                 event.calendar = calendar
                 event.startDate = eventStartDate
+                if alertOffset != nil {
+                    let alarm = EKAlarm.init(relativeOffset: alertOffset!)
+                    event.addAlarm(alarm)
+                }
 
                 if let allDay = call.getBool("allDay") {
                     event.endDate = Date(timeIntervalSince1970: endDate / 1000)
@@ -80,6 +86,90 @@ public class CapacitorCalendar: CAPPlugin {
                     call.resolve()
                 } catch let error as NSError {
                     let msg = "Failed to save event with error: \(error)"
+                    print(msg)
+                    call.reject(msg)
+                    return
+                }
+            } else {
+                let msg = "EK access denied: \(String(describing: error?.localizedDescription))"
+                print(msg)
+                call.reject(msg)
+            }
+        }
+    }
+    
+    @objc func createReminder(_ call: CAPPluginCall) {
+        guard let title = call.getString("title"), !title.isEmpty else {
+            let msg = "Must provide title property"
+            print(msg)
+            call.reject(msg)
+            return
+        }
+        
+        let notes = call.getString("notes") ?? ""
+        
+        guard let startDateDay = call.getDouble("startDateDay"), startDateDay > 0 else {
+           let msg = "Must provide startDateDay property"
+           print(msg)
+           call.reject(msg)
+           return
+       }
+
+        guard let startDateMonth = call.getDouble("startDateMonth"), startDateMonth > 0 else {
+           let msg = "Must provide startDateMonth property"
+           print(msg)
+           call.reject(msg)
+           return
+       }
+
+        guard let startDateYear = call.getDouble("startDateYear"), startDateYear > 0 else {
+           let msg = "Must provide startDateYear property"
+           print(msg)
+           call.reject(msg)
+           return
+       }
+        guard let startDateHour = call.getDouble("startDateHour"), startDateHour > 0 else {
+           let msg = "Must provide startDateHour property"
+           print(msg)
+           call.reject(msg)
+           return
+       }
+        guard let startDateMinute = call.getDouble("startDateMinute"), startDateMinute > 0 else {
+           let msg = "Must provide startDateMinute property"
+           print(msg)
+           call.reject(msg)
+           return
+       }
+
+        store.requestAccess(to: .event) { (accessGranted: Bool, error: Error?) in
+            if accessGranted && error == nil {
+                var calendar = self.store.defaultCalendarForNewEvents
+                if let identifier = call.getString("calendarId") {
+                    if let selectedCalendar = self.store.calendar(withIdentifier: identifier) {
+                        calendar = selectedCalendar
+                    }
+                }
+                
+                let startDateComponents = DateComponents.init(
+                    year: Int(startDateYear),
+                    month: Int(startDateMonth),
+                    day: Int(startDateDay),
+                    hour: Int(startDateHour),
+                    minute: Int(startDateMinute)
+                )
+
+                let reminder = EKReminder.init(eventStore: self.store)
+                reminder.title = title
+                reminder.notes = notes
+                reminder.calendar = calendar
+                reminder.startDateComponents = startDateComponents
+                reminder.dueDateComponents = startDateComponents
+
+                do {
+                    try self.store.save(reminder, commit: true)
+                    call.resolve()
+                } catch let error as NSError {
+                    let msg = "Failed to save reminder with error: \(error)"
                     print(msg)
                     call.reject(msg)
                     return
