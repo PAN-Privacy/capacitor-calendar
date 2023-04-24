@@ -24,7 +24,7 @@ public class CapacitorCalendar: CAPPlugin {
         
         let location = call.getString("location") ?? ""
         let notes = call.getString("notes") ?? ""
-        let alertOffset = call.getDouble("alertOffset") ?? nil
+        let alarmOffset = call.getDouble("alarmOffset") ?? nil
 
         guard let startDate = call.getDouble("startDate"), startDate > 0 else {
            let msg = "Must provide startDate property"
@@ -61,8 +61,9 @@ public class CapacitorCalendar: CAPPlugin {
                 event.notes = notes
                 event.calendar = calendar
                 event.startDate = eventStartDate
-                if alertOffset != nil {
-                    let alarm = EKAlarm.init(relativeOffset: alertOffset!)
+
+                if alarmOffset != nil {
+                    let alarm = EKAlarm.init(relativeOffset: alarmOffset!)
                     event.addAlarm(alarm)
                 }
 
@@ -107,63 +108,53 @@ public class CapacitorCalendar: CAPPlugin {
         }
         
         let notes = call.getString("notes") ?? ""
+        let alarmOffset = call.getDouble("alarmOffset") ?? nil
         
-        guard let startDateDay = call.getDouble("startDateDay"), startDateDay > 0 else {
-           let msg = "Must provide startDateDay property"
+        guard let startDate = call.getObject("startDate")  else {
+           let msg = "Must provide startDate object property"
            print(msg)
            call.reject(msg)
            return
-       }
+        }
+        
+        guard let startDateComponents = self.fromPluginCallToDateComponenet(startDate) else {
+            let msg = "Invalid startDate object property"
+            print(msg)
+            call.reject(msg)
+            return
+        }
 
-        guard let startDateMonth = call.getDouble("startDateMonth"), startDateMonth > 0 else {
-           let msg = "Must provide startDateMonth property"
+        guard let dueDate = call.getObject("dueDate")  else {
+           let msg = "Must provide startDate object property"
            print(msg)
            call.reject(msg)
            return
-       }
+        }
 
-        guard let startDateYear = call.getDouble("startDateYear"), startDateYear > 0 else {
-           let msg = "Must provide startDateYear property"
-           print(msg)
-           call.reject(msg)
-           return
-       }
-        guard let startDateHour = call.getDouble("startDateHour"), startDateHour > 0 else {
-           let msg = "Must provide startDateHour property"
-           print(msg)
-           call.reject(msg)
-           return
-       }
-        guard let startDateMinute = call.getDouble("startDateMinute"), startDateMinute > 0 else {
-           let msg = "Must provide startDateMinute property"
-           print(msg)
-           call.reject(msg)
-           return
-       }
+        guard let dueDateComponents = self.fromPluginCallToDateComponenet(dueDate) else {
+            let msg = "Invalid dueDate object property"
+            print(msg)
+            call.reject(msg)
+            return
+        }
 
-        store.requestAccess(to: .event) { (accessGranted: Bool, error: Error?) in
+        
+        store.requestAccess(to: .reminder) { (accessGranted: Bool, error: Error?) in
             if accessGranted && error == nil {
-                var calendar = self.store.defaultCalendarForNewEvents
-                if let identifier = call.getString("calendarId") {
-                    if let selectedCalendar = self.store.calendar(withIdentifier: identifier) {
-                        calendar = selectedCalendar
-                    }
-                }
-                
-                let startDateComponents = DateComponents.init(
-                    year: Int(startDateYear),
-                    month: Int(startDateMonth),
-                    day: Int(startDateDay),
-                    hour: Int(startDateHour),
-                    minute: Int(startDateMinute)
-                )
-
+                let calendar = self.store.defaultCalendarForNewReminders()
                 let reminder = EKReminder.init(eventStore: self.store)
+                
                 reminder.title = title
                 reminder.notes = notes
                 reminder.calendar = calendar
                 reminder.startDateComponents = startDateComponents
-                reminder.dueDateComponents = startDateComponents
+                reminder.dueDateComponents = dueDateComponents
+                
+                if alarmOffset != nil {
+                    let alarm = EKAlarm.init(relativeOffset: alarmOffset!)
+                    reminder.addAlarm(alarm)
+                }
+
 
                 do {
                     try self.store.save(reminder, commit: true)
@@ -339,6 +330,44 @@ public class CapacitorCalendar: CAPPlugin {
             }
         }
     }
+    
+    @objc func findReminderByTitle(_ call: CAPPluginCall) {
+        guard var title = call.getString("title"), !title.isEmpty else {
+            let error = "Must provide title property"
+            call.reject(error)
+            return
+        }
+        
+        store.requestAccess(to: .reminder) { (accessGranted: Bool, error: Error?) in
+            if accessGranted && error == nil {
+                
+                let calendars = self.store.calendars(for: EKEntityType.reminder)
+                title = title.replacingOccurrences(of: "'", with: "\\'")
+                let predicateString = String(format: "title contains[c] '%@'", title)
+                let predicate: NSPredicate? = self.store.predicateForReminders(in: calendars)
+                let matches = NSPredicate(format: predicateString)
+
+                if let aPredicate = predicate {
+                    self.store.fetchReminders(matching: aPredicate, completion: {(_ r: [Any]?) -> Void in
+                        let reminders = r as? [EKReminder?] ?? [EKReminder?]()
+                        let rs = NSArray(array: reminders as [Any])
+                        let filteredReminders = rs.filtered(using: matches).map {
+                            (reminder: Any) -> [String: Any?] in
+                            
+                            return self.toReminderOptions(reminder as! EKReminder)
+                        }
+                        call.resolve(["reminders": filteredReminders])
+                    })
+                } else {
+                    call.resolve(["reminders": []])
+                }
+            } else {
+                let msg = "EK access denied"
+                print(msg)
+                call.reject(msg)
+            }
+        }
+    }
 
     @objc func deleteEventById(_ call: CAPPluginCall) {
         deleteEvent(call)
@@ -415,6 +444,75 @@ public class CapacitorCalendar: CAPPlugin {
                 call.reject(msg)
             }
         }
+    }
+    
+    private func fromPluginCallToDateComponenet(_ date: JSObject) -> DateComponents? {
+        guard let startDateDay = date["day"] as? Double else {
+            let msg = "Must provide startDate.day property"
+            print(msg)
+            return nil
+        }
+
+        guard let startDateMonth = date["month"] as? Double else {
+            let msg = "Must provide startDate.month property"
+            print(msg)
+            return nil
+        }
+
+        guard let startDateYear = date["year"] as? Double else {
+            let msg = "Must provide startDate.year property"
+            print(msg)
+            return nil
+        }
+
+        guard let startDateHour = date["hour"] as? Double else {
+            let msg = "Must provide startDate.hour property"
+            print(msg)
+            return nil
+        }
+
+        guard let startDateMinute = date["minute"] as? Double else {
+            let msg = "Must provide startDate.minute property"
+            print(msg)
+            return nil
+        }
+
+        let startDateComponents = DateComponents.init(
+            year: Int(startDateYear),
+            month: Int(startDateMonth),
+            day: Int(startDateDay),
+            hour: Int(startDateHour),
+            minute: Int(startDateMinute)
+        )
+
+        return startDateComponents
+    }
+    
+    private func toReminderOptions(_ reminder: EKReminder) -> [String: Any?] {
+        
+        let startDate = [
+            "day": reminder.startDateComponents?.day ?? 0,
+            "month": reminder.startDateComponents?.month ?? 0,
+            "year": reminder.startDateComponents?.year ?? 0,
+            "hour": reminder.startDateComponents?.hour ?? 0,
+            "minute": reminder.startDateComponents?.minute ?? 0
+        ]
+                
+        let dueDate = [
+            "day":  reminder.dueDateComponents?.day ?? 0,
+            "month": reminder.dueDateComponents?.month ?? 0,
+            "year": reminder.dueDateComponents?.year ?? 0,
+            "hour": reminder.dueDateComponents?.hour ?? 0,
+            "minute": reminder.dueDateComponents?.minute ?? 0
+        ]
+        
+        return [
+            "title": reminder.title,
+            "id": reminder.calendarItemIdentifier,
+            "notes": reminder.notes,
+            "startDate": startDate,
+            "dueDate": dueDate
+        ]
     }
 
 }
